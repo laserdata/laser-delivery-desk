@@ -1,0 +1,766 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delivery Desk · LaserData</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  /* LaserData navy, with LaserData lime as the accent. Dark is the look;
+     light is opt-in, for slides and screenshots. */
+  :root {
+    --bg: #0a1020; --panel: #111a2e; --ink: #dfe7f5; --muted: #8796b3; --line: #22304d;
+    --good: #b8ff52; --bad: #ff5a6a; --warn: #ffb84d; --accent: #b8ff52; --on-accent: #0a1020;
+    --chip: #13213d; --btn: #1b2a47; --btn-line: #2d4270; --logo-fg: #ffffff; --logo-cut: #041520;
+    color-scheme: dark;
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f6fb; --panel: #ffffff; --ink: #1a2236; --muted: #5d6b86; --line: #d5dcea;
+    --good: #3f7d0a; --bad: #c92f40; --warn: #a86500; --accent: #b8ff52; --on-accent: #0a1020;
+    --chip: #eef2fa; --btn: #eef2fa; --btn-line: #bccbe6; --logo-fg: #1a2236; --logo-cut: #ffffff;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  h1 { font-size: 17px; margin: 0; font-weight: 600; white-space: nowrap; }
+  h1 b { color: var(--accent); }
+  :root[data-theme="light"] h1 b { color: var(--good); }
+  h1 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+  #logo { display: inline-flex; align-items: center; height: 26px; color: inherit; text-decoration: none; }
+  #logo svg { height: 100%; width: auto; }
+  #logo #D, #logo #laserdata { fill: var(--logo-fg) !important; stroke: var(--logo-fg) !important; }
+  #logo #L { fill: var(--logo-cut) !important; }
+  #logo .fallback { font: 600 17px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .divider { width: 1px; align-self: stretch; background: var(--line); }
+  .clock { font: 600 20px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 2px 10px; border-radius: 8px; background: var(--chip); }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+  button { font: inherit; border: 1px solid var(--btn-line); background: var(--btn); color: var(--ink); padding: 6px 12px; border-radius: 8px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+  button.danger { color: var(--bad); }
+  button.small { padding: 2px 8px; font-size: 12px; }
+  button:disabled { opacity: .4; cursor: default; }
+  main { flex: 1; display: grid; grid-template-columns: 1fr 400px; min-height: 0; }
+  #mapwrap { position: relative; min-height: 0; display: flex; flex-direction: column; }
+  #map { flex: 1; min-height: 300px; }
+  #vans { display: flex; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  .van { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--chip); font-size: 13px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+  aside { border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; min-height: 0; }
+  section { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+  .empty { color: var(--muted); font-size: 13px; }
+  .exc { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; }
+  .exc.open { border-color: var(--warn); }
+  .exc .top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .exc .title { font-weight: 600; }
+  .badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--chip); color: var(--muted); }
+  .badge.open { background: var(--warn); color: var(--on-accent); }
+  .badge.resolved { background: var(--accent); color: var(--on-accent); }
+  .badge.failed { background: var(--bad); color: #fff; }
+  .steps { display: flex; gap: 4px; margin: 8px 0 4px; }
+  .step { flex: 1; text-align: center; font-size: 12px; padding: 3px 0; border-radius: 6px; background: var(--chip); color: var(--muted); }
+  .step.sent, .step.working { background: color-mix(in srgb, var(--accent) 25%, transparent); color: var(--ink); }
+  .step.working { animation: pulse 1s ease-in-out infinite; }
+  .step.done { background: var(--accent); color: var(--on-accent); }
+  .step.replayed { background: var(--accent); color: var(--on-accent); outline: 2px dashed var(--warn); outline-offset: -2px; }
+  .step.failed { background: var(--bad); color: #fff; }
+  .dlq { border: 1px solid var(--bad); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; font-size: 13px; }
+  .dlq.redriven { border-color: var(--line); color: var(--muted); }
+  .dlq .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  @keyframes pulse { 50% { opacity: .55; } }
+  .summary { font-size: 13px; color: var(--muted); }
+  .note { font-size: 12px; color: var(--warn); margin-top: 2px; }
+  .agent { display: grid; grid-template-columns: 14px 80px 1fr auto; gap: 8px; align-items: center; padding: 3px 0; font-size: 13px; }
+  .agent .pid { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  .approval { border: 2px solid var(--warn); border-radius: 10px; padding: 10px; }
+  .approval p { margin: 0 0 8px; }
+  .approval .row { display: flex; gap: 8px; }
+  .invoice table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+  .invoice td, .invoice th { text-align: right; padding: 2px 4px; border-bottom: 1px solid var(--line); }
+  .invoice td:first-child, .invoice th:first-child { text-align: left; }
+  .invoice .over { color: var(--bad); font-weight: 600; }
+  #feed { font-size: 12px; max-height: 340px; overflow-y: auto; }
+  .ev { display: grid; grid-template-columns: 62px 1fr; gap: 6px; padding: 2px 0; border-bottom: 1px dashed var(--line); }
+  .ev .who { color: var(--muted); }
+  .ev.bad .what { color: var(--bad); }
+  .ev.good .what { color: var(--good); }
+  .ev.warn .what { color: var(--warn); }
+  .vanicon { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; color: #0a1020; font: 700 12px system-ui; border: 2px solid #0a1020; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+  .vanicon.trouble { box-shadow: 0 0 0 4px rgba(220,38,38,.5); animation: ring 1s ease-in-out infinite; }
+  .vanicon.parked { filter: grayscale(1); opacity: .6; }
+  @keyframes ring { 50% { box-shadow: 0 0 0 9px rgba(220,38,38,.15); } }
+  .moving .leaflet-marker-icon.van-marker { transition: transform .5s linear; }
+  /* OpenStreetMap's tiles, turned navy for the dark theme and toned down for the light one. */
+  .leaflet-tile-pane { filter: invert(1) hue-rotate(195deg) brightness(1.6) contrast(.75) saturate(.6); }
+  :root[data-theme="light"] .leaflet-tile-pane { filter: saturate(.45) contrast(.95); }
+  .leaflet-container { background: var(--bg); }
+  .depot { width: 18px; height: 18px; background: var(--accent); border: 2px solid #0a1020; border-radius: 3px; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+  button.on { background: var(--warn); border-color: var(--warn); color: var(--on-accent); }
+  #demo.on { background: var(--accent); border-color: var(--accent); }
+  .banner { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .banner b { color: var(--accent); }
+  :root[data-theme="light"] .banner b { color: var(--good); }
+  .readers { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; font-size: 13px; }
+  .readers span:nth-child(even) { text-align: right; font-family: ui-monospace, Menlo, monospace; }
+  .eval { display: grid; grid-template-columns: 18px 1fr; gap: 4px; font-size: 13px; padding: 2px 0; }
+  .eval .detail { grid-column: 2; color: var(--muted); font-size: 12px; }
+  .eval .ok { color: var(--good); font-weight: 700; }
+  .eval .no { color: var(--bad); font-weight: 700; }
+  .exc a { color: var(--muted); }
+  /* Present mode: larger type for a room. The map keeps its own scale. */
+  html.present header, html.present aside, html.present #vans { zoom: 1.25; }
+  #timeline { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-top: 1px solid var(--line); background: var(--panel); font-size: 13px; }
+  #timeline input[type=range] { flex: 1; accent-color: var(--warn); }
+  #timeline .when { color: var(--muted); white-space: nowrap; }
+  #timeline.rewound { background: color-mix(in srgb, var(--warn) 14%, var(--panel)); }
+  .clock.rewound { background: var(--warn); color: var(--on-accent); }
+  .vanctl { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  .vanctl input { width: 90px; accent-color: var(--accent); }
+  .vanctl b { color: var(--ink); font-family: ui-monospace, Menlo, monospace; min-width: 1ch; }
+  .reg { display: grid; grid-template-columns: 14px 70px 1fr auto; gap: 8px; align-items: center; padding: 2px 0; font-size: 13px; }
+  .reg .skills { color: var(--muted); font-size: 12px; }
+  .serves { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 13px; margin-bottom: 6px; }
+  .serves span:nth-child(odd) { font-family: ui-monospace, Menlo, monospace; color: var(--muted); }
+  .mem { font-size: 13px; padding: 2px 0; border-bottom: 1px dashed var(--line); }
+  .mem .when { color: var(--muted); font-size: 12px; }
+  .h2row { display: flex; justify-content: space-between; align-items: center; }
+  .toast { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 6px 14px; border-radius: 8px; z-index: 1000; font-size: 13px; opacity: 0; transition: opacity .3s; pointer-events: none; }
+  .toast.show { opacity: .92; }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; grid-template-rows: 60vh auto; }
+    aside { border-left: 0; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <a id="logo" href="https://laserdata.com" target="_blank" rel="noopener" aria-label="LaserData"><span class="fallback">laserdata</span></a>
+  <span class="divider"></span>
+  <h1>Delivery <b>Desk</b> <small>on Laser SDK</small></h1>
+  <span class="clock" id="clock">09:00</span>
+  <span class="banner" id="banner"></span>
+  <div class="actions">
+    <label class="vanctl" title="How many vans run the 20 stops. Changing it starts a new day.">Vans <input type="range" id="vancount" min="2" max="8" step="1" value="4"><b id="vanval">4</b></label>
+    <button data-scenario="road-closure">Road closure</button>
+    <button data-scenario="driver-unreachable">Driver unreachable</button>
+    <button data-scenario="not-home">Nobody home</button>
+    <button data-scenario="overbilled">Overbilled invoice</button>
+    <button id="sms" title="The SMS gateway rejects the next notify step until it is fixed: the customer agent retries, then dead-letters the task">SMS gateway down</button>
+    <button id="demo" title="Run the day unattended, again and again: incidents, approvals and a new day on their own">Demo loop</button>
+    <button id="chaos" title="A chaos monkey that kills a random agent every few seconds">Chaos</button>
+    <button id="present" title="Larger type for a room">Present</button>
+    <button id="theme" title="Light or dark">Light</button>
+    <button id="newday" class="primary">New day</button>
+  </div>
+</header>
+<main>
+  <div id="mapwrap">
+    <div id="map"></div>
+    <div class="toast" id="toast"></div>
+    <div id="timeline">
+      <button id="rewind" class="small" title="Rebuild the day so far from the log and scrub through it">Rewind</button>
+      <input type="range" id="scrub" min="0" max="0" value="0" hidden>
+      <span class="when" id="when">Time travel: replay the day from the log</span>
+      <button id="live" class="small" hidden>Back to live</button>
+    </div>
+    <div id="vans"></div>
+  </div>
+  <aside>
+    <section id="approvals-section" hidden>
+      <h2>Needs a decision</h2>
+      <div id="approvals"></div>
+    </section>
+    <section id="dlq-section" hidden>
+      <h2>Dead letters</h2>
+      <div id="dlq"></div>
+    </section>
+    <section>
+      <h2>Exceptions</h2>
+      <div id="exceptions"><div class="empty">None yet. Pick an incident above.</div></div>
+    </section>
+    <section>
+      <h2 id="orders-title">New orders</h2>
+      <div id="orders"><div class="empty">Customers order through the day. Dispatch gives each order to the van that can fit it in best.</div></div>
+    </section>
+    <section class="invoice">
+      <h2>Carrier invoice</h2>
+      <div id="invoice"><div class="empty">Arrives when every van is back.</div></div>
+    </section>
+    <section id="evals-section" hidden>
+      <h2>Evals</h2>
+      <div id="evals"></div>
+    </section>
+    <section>
+      <h2>Readers</h2>
+      <div id="readers" class="readers"></div>
+    </section>
+    <section>
+      <h2>Agents</h2>
+      <div id="agents"></div>
+    </section>
+    <section>
+      <h2>Agent registry</h2>
+      <div id="registry"><div class="empty">No cards yet.</div></div>
+    </section>
+    <section>
+      <div class="h2row"><h2>Customer memory</h2><button id="forget" class="small" title="Forget every customer fact">Forget all</button></div>
+      <div id="memory"><div class="empty">Nothing remembered yet. Customers hit by an incident are remembered across days.</div></div>
+    </section>
+    <section>
+      <h2>On the log</h2>
+      <div id="feed"></div>
+    </section>
+  </aside>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+const money = (c) => `$${(c / 100).toFixed(2)}`;
+
+let cfg, state = {routes: {}, stops: {}, exceptions: {}, incidents: {}, agents: {}, approvals: []};
+const positions = {};
+const steps = {};   // incident -> {assess, replan, notify} -> state
+const notes = {};   // incident -> latest replay or holding note
+const feed = [];
+let rewind = null;  // {data, t}: the day replayed from the log, and the minute on screen
+let draggingVans = false;
+
+// What is on screen: the live day, or the day as it was at the rewound minute.
+function cur() {
+  if (rewind) return rewind.snap;
+  return {stops: state.stops, routes: state.routes, positions, exceptions: state.exceptions,
+          steps, notes, feed, clock: state.clock, paths: state.paths || {}};
+}
+
+// The day at minute t, from the replayed topics alone.
+function snapshot(t) {
+  const tl = rewind.data;
+  const pos = {};
+  for (const [c, vans] of tl.frames) { if (c > t) break; Object.assign(pos, vans); }
+  const stops = {}, exceptions = {}, st = {}, nt = {}, fd = [], routes = {};
+  for (const [van, spec] of Object.entries(cfg.vans)) routes[van] = {stops: spec.stops, status: "active"};
+  for (const e of tl.events) {
+    if (e.clock > t) break;
+    if (e.kind === "delivered") stops[e.stop] = {status: "delivered", by: e.van};
+    else if (e.kind === "failed" && stops[e.stop]?.status !== "delivered") stops[e.stop] = {status: "failed"};
+    if (e.kind === "order") {
+      stops[e.stop] = {status: "new"};
+      exceptions[e.incident] = {id: e.incident, van: "", kind: "new_order", stop: e.stop, state: "open", opened: e.clock, run: ""};
+    } else if (e.kind === "exception") exceptions[e.incident] = {id: e.incident, van: e.van, kind: e.exc_kind, stop: e.stop, state: "open", opened: e.clock, run: ""};
+    else if (e.kind === "resolved" && exceptions[e.incident]) {
+      Object.assign(exceptions[e.incident], {state: "resolved", summary: e.text, closed: e.clock});
+      if (exceptions[e.incident].kind === "new_order" && stops[exceptions[e.incident].stop]?.status === "new") stops[exceptions[e.incident].stop] = {status: "pending"};
+    }
+    else if (e.kind === "workflow_failed" && exceptions[e.incident]) Object.assign(exceptions[e.incident], {state: "failed", summary: e.text});
+    applyEvent(e, st, nt);
+    fd.unshift(e);
+  }
+  return {stops, routes, positions: pos, exceptions, steps: st, notes: nt, feed: fd.slice(0, 120), clock: t, paths: {}};
+}
+
+const colour = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+const map = L.map("map", {zoomControl: true}).setView([-37.808, 144.965], 13);
+const store = {
+  get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
+};
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+}).addTo(map);
+function applyTheme() {
+  const light = store.get("desk.theme") === "light";
+  document.documentElement.dataset.theme = light ? "light" : "dark";
+  const present = store.get("desk.present") === "1";
+  document.documentElement.classList.toggle("present", present);
+  $("present").classList.toggle("on", present);
+  $("theme").textContent = light ? "Dark" : "Light";
+  if (cfg) render();
+}
+applyTheme();
+map.on("zoomstart", () => $("map").classList.remove("moving"));
+map.on("zoomend", () => setTimeout(() => $("map").classList.add("moving"), 50));
+$("map").classList.add("moving");
+
+const vanMarkers = {}, stopMarkers = {}, routeLines = {};
+
+function toast(text) {
+  const t = $("toast");
+  t.textContent = text;
+  t.classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+async function post(url, body) {
+  const r = await fetch(url, {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(body || {})});
+  return r.json();
+}
+
+function ownerOf(stop, routes) {
+  for (const [van, r] of Object.entries(routes)) if (r.stops.includes(stop) && cfg.vans[van]) return van;
+  return null;
+}
+
+function drawStops() {
+  const S = cur();
+  const planned = new Set(Object.values(cfg.vans).flatMap((v) => v.stops));
+  for (const [id, s] of Object.entries(cfg.stops)) {
+    if (!planned.has(id) && !S.stops[id]) {
+      // Not ordered yet: off the map until the customer orders.
+      if (stopMarkers[id]) { stopMarkers[id].remove(); delete stopMarkers[id]; }
+      continue;
+    }
+    const st = (S.stops[id] || {}).status || "pending";
+    const owner = ownerOf(id, S.routes) || (cfg.vans[(S.stops[id] || {}).by] ? S.stops[id].by : null);
+    const ring = owner ? cfg.vans[owner].colour : "#6b7280";
+    const fill = {delivered: colour("--good"), failed: colour("--bad"), retry: colour("--warn")}[st] || colour("--panel");
+    const style = st === "new"
+      ? {radius: 8, color: colour("--warn"), weight: 3, dashArray: "3 3", fillColor: colour("--panel"), fillOpacity: 1}
+      : {radius: 7, color: ring, weight: 3, dashArray: null, fillColor: fill, fillOpacity: 1};
+    const tip = `<b>${esc(s.customer)}</b><br>${esc(s.suburb)}<br>${esc(st === "new" ? "new order, finding a van" : st)}${owner ? " &middot; " + owner : ""}`;
+    if (!stopMarkers[id]) stopMarkers[id] = L.circleMarker([s.lat, s.lon], style).addTo(map).bindTooltip(tip);
+    else stopMarkers[id].setStyle(style).setTooltipContent(tip);
+  }
+}
+
+let legs = {};  // road shapes, "a>b" -> {m, pts}
+const leg = (a, b) => legs[`${a}>${b}`]?.pts || [[place(a).lat, place(a).lon], [place(b).lat, place(b).lon]];
+const place = (id) => id === "depot" ? cfg.depot : cfg.stops[id];
+
+function ahead(path, p) {
+  // The van's own road ahead, from the point nearest where it is now.
+  if (!path || !path.length) return [];
+  let best = 0, bd = Infinity;
+  path.forEach((q, i) => { const d = (q[0] - p.lat) ** 2 + (q[1] - p.lon) ** 2; if (d < bd) { bd = d; best = i; } });
+  return path.slice(best);
+}
+
+function drawRoutes() {
+  const S = cur();
+  for (const [van, spec] of Object.entries(cfg.vans)) {
+    const r = S.routes[van] || {stops: []};
+    const p = S.positions[van];
+    let pts = [];
+    if (!rewind && p && r.status === "active" && p.status !== "done") {
+      pts = [[p.lat, p.lon], ...ahead(S.paths[van], p)];
+      const open = r.stops.filter((s) => ["pending", "retry"].includes((S.stops[s] || {}).status));
+      const at = open.indexOf(p.target);
+      let prev = p.target || "depot";
+      if (prev !== "depot") {
+        for (const s of open.slice(at + 1)) { pts.push(...leg(prev, s).slice(1)); prev = s; }
+        pts.push(...leg(prev, "depot").slice(1));
+      }
+    }
+    const style = {color: spec.colour, weight: 4, opacity: .8, dashArray: "2 7", lineCap: "round"};
+    if (!routeLines[van]) routeLines[van] = L.polyline(pts, style).addTo(map);
+    else routeLines[van].setLatLngs(pts);
+  }
+}
+
+function vanIcon(van, p) {
+  const trouble = p && (p.status === "stopped" || p.status === "unreachable");
+  const parked = p && p.status === "parked";
+  return L.divIcon({
+    className: "van-marker", iconSize: [26, 26], iconAnchor: [13, 13],
+    html: `<div class="vanicon ${trouble ? "trouble" : ""} ${parked ? "parked" : ""}" style="background:${cfg.vans[van].colour}">${van.split("-")[1]}</div>`,
+  });
+}
+
+function drawVans() {
+  const S = cur();
+  for (const van of Object.keys(cfg.vans)) {
+    const p = S.positions[van];
+    if (!p) continue;
+    const key = `${p.status}`;
+    const tip = `<b>${van}</b> (${esc(cfg.vans[van].driver)})<br>${esc(p.status)}${p.target && p.target !== "depot" ? " &rarr; " + esc(cfg.stops[p.target]?.suburb) : ""}<br>${(p.metres / 1000).toFixed(1)} km`;
+    if (!vanMarkers[van]) {
+      vanMarkers[van] = L.marker([p.lat, p.lon], {icon: vanIcon(van, p), zIndexOffset: 1000}).addTo(map).bindTooltip(tip);
+      vanMarkers[van].key = key;
+    } else {
+      vanMarkers[van].setLatLng([p.lat, p.lon]).setTooltipContent(tip);
+      if (vanMarkers[van].key !== key) { vanMarkers[van].setIcon(vanIcon(van, p)); vanMarkers[van].key = key; }
+    }
+  }
+  const chips = Object.entries(cfg.vans).map(([van, spec]) => {
+    const p = S.positions[van] || {};
+    const left = (S.routes[van]?.stops || []).filter((s) => ["pending", "retry", undefined].includes(S.stops[s]?.status)).length;
+    const words = {moving: "driving", dwelling: "dropping off", stopped: "stopped", unreachable: "no answer", parked: "parked", done: "back at depot"};
+    return `<span class="van"><span class="dot" style="background:${spec.colour}"></span><b>${van}</b> ${esc(spec.driver)} &middot; ${words[p.status] || "starting"} &middot; ${left} left</span>`;
+  });
+  $("vans").innerHTML = chips.join("");
+}
+
+function drawOrders() {
+  const S = cur();
+  const list = Object.values(S.exceptions).filter((e) => e.kind === "new_order").sort((a, b) => (b.opened || 0) - (a.opened || 0));
+  $("orders-title").textContent = list.length ? `New orders (${list.length})` : "New orders";
+  if (!list.length) return;
+  $("orders").innerHTML = list.slice(0, 6).map((e) => {
+    const s = S.steps[e.id] || {};
+    const spec = cfg.stops[e.stop] || {};
+    const pills = ["assign", "notify"].map((k) => `<div class="step ${s[k] || ""}">${k === "notify" ? "confirm" : k}</div>`).join("");
+    return `<div class="exc ${e.state}">
+      <div class="top"><span class="title">${esc(spec.customer)} &middot; ${esc(spec.suburb)}</span><span class="badge ${e.state}">${e.state === "resolved" ? esc(e.van || "placed") : e.state}</span></div>
+      <div class="steps">${pills}</div>
+    </div>`;
+  }).join("") + (list.length > 6 ? `<div class="empty">and ${list.length - 6} earlier</div>` : "");
+}
+
+function drawExceptions() {
+  const S = cur();
+  const list = Object.values(S.exceptions).filter((e) => e.kind !== "new_order").sort((a, b) => (b.opened || 0) - (a.opened || 0));
+  if (!list.length) { $("exceptions").innerHTML = '<div class="empty">None yet. Pick an incident above.</div>'; return; }
+  const names = {road_closure: "Road closure", unreachable: "Driver unreachable", not_home: "Nobody home"};
+  $("exceptions").innerHTML = list.map((e) => {
+    const s = S.steps[e.id] || {};
+    const pills = ["assess", "replan", "notify"].map((k) => `<div class="step ${s[k] || ""}" title="${esc(s["by_" + k] || "")}">${k}${s["by_" + k] && k !== "notify" ? `<br><small>${esc(s["by_" + k])}</small>` : ""}</div>`).join("");
+    const where = cfg.stops[e.stop]?.suburb;
+    return `<div class="exc ${e.state}">
+      <div class="top"><span class="title">${names[e.kind] || e.kind} &middot; ${e.van}</span><span class="badge ${e.state}">${e.state}</span></div>
+      <div class="summary">${where ? esc(where) + " &middot; " : ""}opened ${hhmm(e.opened)}${e.run ? " &middot; workflow " + esc(e.run.slice(-6)) : ""}${e.trace_id ? ` &middot; <a href="http://localhost:16686/trace/${esc(e.trace_id)}" target="_blank" rel="noopener">trace</a>` : ""}</div>
+      <div class="steps">${pills}</div>
+      ${S.notes[e.id] ? `<div class="note">${esc(S.notes[e.id])}</div>` : ""}
+      ${e.summary ? `<div class="summary">${esc(e.summary)}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+
+function drawAgents() {
+  $("agents").innerHTML = cfg.agents.map((name) => {
+    const a = state.agents[name] || {};
+    const up = a.state === "started";
+    const tint = up ? colour("--good") : a.state === "killed" || a.state === "exited" ? colour("--bad") : colour("--muted");
+    const restarts = a.restarts ? ` &middot; restarted ${a.restarts}&times;` : "";
+    const kill = name === "sim" ? "<span></span>" : `<button class="small danger" data-kill="${name}" ${up ? "" : "disabled"}>Kill</button>`;
+    return `<div class="agent"><span class="dot" style="background:${tint}"></span><b>${name}</b><span class="pid">${a.pid ? "pid " + a.pid : esc(a.state || "")}${restarts}</span>${kill}</div>`;
+  }).join("");
+}
+
+function drawApprovals() {
+  const list = state.approvals || [];
+  $("approvals-section").hidden = !list.length;
+  $("approvals").innerHTML = list.map((a) => `<div class="approval">
+    <p>${esc(a.prompt)}</p>
+    <div class="row"><button class="primary" data-approve="${a.id}">Hold and dispute</button><button data-decline="${a.id}">Pay in full</button></div>
+  </div>`).join("");
+}
+
+function drawInvoice() {
+  const inv = state.invoice, check = state.check;
+  if (!inv) {
+    const flag = state.overbill ? ` The carrier will overbill for ${state.overbill}.` : "";
+    $("invoice").innerHTML = `<div class="empty">Arrives when every van is back.${esc(flag)}</div>`;
+    return;
+  }
+  const rows = (check?.lines || inv.lines).map((l) => {
+    const got = l.logged;
+    const diff = l.diff ?? 0;
+    return `<tr><td>${l.van}</td><td>${l.drops}${got ? " / " + got.drops : ""}</td><td>${l.km}${got ? " / " + got.km : ""}</td><td>${money(l.cents)}</td><td class="${diff > 0 ? "over" : ""}">${got ? (diff > 0 ? "+" : "") + money(diff) : ""}</td></tr>`;
+  }).join("");
+  $("invoice").innerHTML = `<div>${esc(inv.carrier)}: <b>${money(inv.cents)}</b></div>
+    <table><tr><th>Van</th><th>Drops billed / log</th><th>km billed / log</th><th>Billed</th><th>Over</th></tr>${rows}</table>
+    <div class="summary" style="margin-top:6px">${esc(check?.summary || (check?.state === "waiting" ? "Waiting on the desk" : "Being checked against the log"))}</div>
+    ${check?.fork ? `<div class="note">What-if: ${esc(check.fork.text)}${check.state === "waiting" ? "" : " Squashed once the desk decided."}</div>` : ""}`;
+}
+
+function drawReaders() {
+  const r = state.readers || {};
+  const rows = [];
+  for (const van of Object.keys(cfg.vans)) rows.push([`${van} drops / km`, `${(r.drops || {})[van] || 0} / ${(r.km || {})[van] ?? 0}`]);
+  rows.push(["Failed drops", r.failed ?? 0]);
+  rows.push(["Exceptions", r.exceptions ?? 0]);
+  rows.push(["New orders placed", `${r.orders_placed ?? 0} of ${r.orders ?? 0}`]);
+  rows.push(["Mean time to resolve", r.resolve_minutes == null ? "-" : `${r.resolve_minutes} min`]);
+  rows.push(["Steps done", Object.entries(r.steps || {}).map(([a, n]) => `${a} ${n}`).join(", ") || "-"]);
+  rows.push(["Kills", Object.entries(r.kills || {}).map(([a, n]) => `${a} ${n}`).join(", ") || "-"]);
+  rows.push(["Redeliveries answered from KV", r.replays ?? 0]);
+  $("readers").innerHTML = rows.map(([k, v]) => `<span>${esc(k)}</span><span>${esc(v)}</span>`).join("");
+}
+
+function drawEvals() {
+  const list = state.evals;
+  $("evals-section").hidden = !list;
+  if (!list) return;
+  $("evals").innerHTML = list.map((e) => `<div class="eval"><span class="${e.ok ? "ok" : "no"}">${e.ok ? "&#10003;" : "&#10007;"}</span><span>${esc(e.name)}</span><span class="detail">${esc(e.detail)}</span></div>`).join("");
+}
+
+function drawToggles() {
+  const demo = state.demo || {};
+  $("demo").classList.toggle("on", !!demo.running);
+  $("demo").setAttribute("aria-pressed", String(!!demo.running));
+  $("chaos").classList.toggle("on", !!state.chaos);
+  $("chaos").setAttribute("aria-pressed", String(!!state.chaos));
+  const bits = [];
+  if (demo.running && demo.text) bits.push(`<b>Demo</b> ${esc(demo.text)}`);
+  if (state.chaos) bits.push("<b>Chaos</b> on");
+  $("banner").innerHTML = bits.join(" &middot; ");
+}
+
+function line(e) {
+  const t = e.kind, who = e.agent;
+  let what = e.text || "", cls = "";
+  if (t === "delivered") what = `${e.van} delivered to ${cfg.stops[e.stop]?.suburb}`, cls = "good";
+  else if (t === "failed") cls = "bad";
+  else if (t === "road_closure") what = `${e.van} stopped: road closed`, cls = "bad";
+  else if (t === "unreachable") what = `${e.van} driver not answering`, cls = "bad";
+  else if (t === "exception") cls = "warn";
+  else if (t === "order") cls = "warn";
+  else if (t === "step") what = `${e.step} ${e.state}${e.text ? ": " + e.text : ""}`;
+  else if (t === "dispatch_step") what = e.text;
+  else if (t === "killed" || t === "workflow_failed") cls = "bad";
+  else if (t === "replay" || t === "resume" || t === "holding") cls = "warn";
+  else if (t === "resolved") cls = "good";
+  else if (t === "back_at_depot") what = `${e.van} back at the depot`;
+  else if (t === "day_done") what = `every van is back; carrier invoice ${money(e.cents)} in`;
+  else if (t === "notice") what = `SMS to ${cfg.stops[e.stop]?.customer}: ${e.text}`;
+  else if (t === "recalled") what = `memory: ${e.text}`, cls = "warn";
+  else if (t === "memory") cls = "bad";
+  else if (t === "forgotten") cls = "warn";
+  else if (t === "fork") cls = "warn";
+  else if (t === "quarantined" || t === "dead_letter" || t === "rejected") cls = "bad";
+  else if (t === "redriven") cls = "good";
+  else if (t === "unquarantined") cls = "good";
+  return `<div class="ev ${cls}"><span class="who">${esc(who)}</span><span class="what">${esc(what || t)}</span></div>`;
+}
+
+// A workflow step's state on its exception card, from one event.
+function applyEvent(e, steps, notes) {
+  if (!e.incident) return;
+  const s = steps[e.incident] ||= {};
+  if (e.kind === "dispatch_step" && !s[e.step]) s[e.step] = "sent";
+  if (e.kind === "step" && e.step) s[e.step] = e.state === "done" ? (s[e.step] === "replayed" ? "replayed" : "done") : "working";
+  if ((e.kind === "step" || e.kind === "replay") && e.step && e.agent) s["by_" + e.step] = e.agent;
+  if (e.kind === "replay" && e.step) { s[e.step] = "replayed"; notes[e.incident] = `${e.agent}: ${e.text}`; }
+  if (e.kind === "holding") notes[e.incident] = `${e.agent}: ${e.text}`;
+  if (e.kind === "resume") notes[e.incident] = `dispatch restarted: ${e.text}`;
+  if (e.kind === "recalled") notes[e.incident] = `customer: ${e.text}`;
+  if (e.kind === "rejected" && e.step) s[e.step] = "failed";
+  if (e.kind === "dead_letter") { s.notify = s.notify === "done" ? "done" : "failed"; notes[e.incident] = `${e.agent}: ${e.text}`; }
+  if (e.kind === "redriven") notes[e.incident] = `desk: ${e.text}`;
+}
+
+function onEvent(e) {
+  applyEvent(e, steps, notes);
+  if (e.kind === "killed" && !rewind) toast(e.text);
+  feed.unshift(e);
+  if (feed.length > 120) feed.pop();
+  if (!rewind) drawFeed();
+}
+
+function drawFeed() {
+  $("feed").innerHTML = cur().feed.map(line).join("");
+}
+
+function drawRegistry() {
+  const r = state.registry || {};
+  if (r.error) { $("registry").innerHTML = `<div class="empty">Registry unavailable: ${esc(r.error)}</div>`; return; }
+  const cards = r.cards || [];
+  if (!cards.length) { $("registry").innerHTML = '<div class="empty">No cards yet.</div>'; return; }
+  const serves = Object.entries(r.serves || {}).map(([skill, who]) =>
+    `<span>${esc(skill)}</span><span>${who.length ? esc(who.join(", ")) : '<span style="color:var(--bad)">nobody</span>'}</span>`).join("");
+  const rows = cards.map((c) => {
+    const tint = c.quarantined ? colour("--warn") : c.fresh ? colour("--good") : colour("--muted");
+    const status = c.quarantined ? "quarantined" : c.fresh ? "card " + c.age_s + "s old" : "stale";
+    const action = (cfg.agents || []).includes(c.agent) && c.agent !== "dispatch" && c.agent !== "sim"
+      ? `<button class="small" data-quarantine="${esc(c.agent)}">${c.quarantined ? "Reinstate" : "Quarantine"}</button>` : "";
+    return `<div class="reg"><span class="dot" style="background:${tint}"></span><b>${esc(c.agent)}</b><span class="skills">${esc(c.skills.join(", "))} &middot; ${status}</span>${action}</div>`;
+  }).join("");
+  $("registry").innerHTML = `<div class="serves">${serves}</div>${rows}`;
+}
+
+const ago = (us) => {
+  const s = Math.max(0, Math.round(Date.now() / 1000 - us / 1e6));
+  return s < 90 ? `${s}s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
+};
+
+function drawMemory() {
+  const list = state.memory || [];
+  const what = {road_closure: "late, road closure", unreachable: "late, change of driver", not_home: "not home"};
+  $("memory").innerHTML = list.length ? list.map((m) =>
+    `<div class="mem"><b>${esc(m.customer)}</b> &middot; ${esc(what[m.kind] || m.kind)} at ${hhmm(m.clock)} <span class="when">${ago(m.at)}</span></div>`).join("")
+    : '<div class="empty">Nothing remembered yet. Customers hit by an incident are remembered across days.</div>';
+}
+
+function drawDlq() {
+  const list = Object.entries(state.dlq || {}).sort(([a], [b]) => b.localeCompare(a));
+  $("dlq-section").hidden = !list.length;
+  const reasons = {1: "retries used up", 2: "rejected", 3: "could not decode", 4: "deadline passed"};
+  $("dlq").innerHTML = list.map(([key, d]) => `<div class="dlq ${d.state}">
+    <div class="row"><b>${esc(d.agent)} &middot; ${esc(d.step || "task")}${d.van ? " &middot; " + esc(d.van) : ""}</b>
+    ${d.state === "parked" ? `<button class="small primary" data-redrive="${esc(key)}">Fix and redrive</button>` : '<span class="badge resolved">redriven</span>'}</div>
+    <div class="summary">${esc(reasons[d.reason] || "reason " + d.reason)} after ${esc(d.attempts)} attempt(s)${d.detail ? ": " + esc(d.detail) : ""}</div>
+  </div>`).join("");
+  $("sms").classList.toggle("on", !!(state.sms_down && state.sms_down.armed));
+}
+
+function drawTimeline() {
+  $("timeline").classList.toggle("rewound", !!rewind);
+  $("scrub").hidden = !rewind;
+  $("live").hidden = !rewind;
+  $("rewind").hidden = !!rewind;
+  $("clock").classList.toggle("rewound", !!rewind);
+  if (!rewind) { $("when").textContent = "Time travel: replay the day from the log"; return; }
+  const r = rewind.data.read || {};
+  $("when").textContent = `${hhmm(rewind.t)} · rebuilt from ${(r.positions || 0) + (r.events || 0)} records on the log`;
+}
+
+function drawVanCount() {
+  const lim = cfg.van_limits || [2, 8];
+  $("vancount").min = lim[0];
+  $("vancount").max = lim[1];
+  if (!draggingVans) {
+    $("vancount").value = state.van_count || Object.keys(cfg.vans).length;
+    $("vanval").textContent = $("vancount").value;
+  }
+}
+
+async function startRewind() {
+  const r = await fetch("/api/timeline");
+  const data = await r.json();
+  if (!r.ok || data.error) { toast(`Could not replay the log: ${data.error || r.status}`); return; }
+  if (!data.frames.length) { toast("Nothing on the log yet"); return; }
+  rewind = {data, t: data.end};
+  rewind.snap = snapshot(rewind.t);
+  $("scrub").min = data.start;
+  $("scrub").max = data.end;
+  $("scrub").value = data.end;
+  render();
+}
+
+function stopRewind() {
+  rewind = null;
+  render();
+}
+
+function render() {
+  $("clock").textContent = hhmm(cur().clock || 540);
+  drawStops(); drawRoutes(); drawVans(); drawExceptions(); drawAgents(); drawApprovals(); drawInvoice();
+  drawOrders(); drawReaders(); drawEvals(); drawToggles(); drawFeed(); drawRegistry(); drawMemory(); drawTimeline(); drawVanCount(); drawDlq();
+}
+
+async function resetDay() {
+  for (const o of [positions, steps, notes]) for (const k of Object.keys(o)) delete o[k];
+  feed.length = 0;
+  rewind = null;
+  $("feed").innerHTML = "";
+  $("newday").disabled = false;
+  // The fleet may have a new size: drop the vans that are no longer on the road.
+  cfg = await (await fetch("/api/config")).json();
+  for (const layer of [vanMarkers, routeLines]) {
+    for (const van of Object.keys(layer)) if (!cfg.vans[van]) { layer[van].remove(); delete layer[van]; }
+  }
+  const s = await (await fetch("/api/state")).json();
+  for (const p of s.positions) positions[p.van] = p;
+  for (const e of s.feed) onEvent(e);
+  state = s;
+  render();
+}
+
+function connect() {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  ws.onmessage = (m) => {
+    const msg = JSON.parse(m.data);
+    if (msg.t === "pos") { for (const p of msg.vans) positions[p.van] = p; if (!rewind) { drawVans(); drawRoutes(); } }
+    else if (msg.t === "event") { onEvent(msg.event); if (!rewind) { drawExceptions(); drawOrders(); } }
+    else if (msg.t === "state") { state = msg.state; render(); }
+    else if (msg.t === "agent") { state.agents[msg.name] = {...(state.agents[msg.name] || {}), state: msg.state, pid: msg.state === "started" ? msg.pid : null}; drawAgents(); }
+    else if (msg.t === "newday") resetDay();
+    else if (msg.t === "demo") { state.demo = {running: msg.running, text: msg.text}; drawToggles(); }
+    else if (msg.t === "chaos") { state.chaos = msg.on; drawToggles(); }
+  };
+  ws.onclose = () => setTimeout(connect, 1000);
+}
+
+document.addEventListener("click", async (ev) => {
+  const b = ev.target.closest("button");
+  if (!b) return;
+  if (b.dataset.scenario) {
+    const r = await post(`/api/scenario/${b.dataset.scenario}`);
+    toast(r.ok ? `${b.textContent}: ${r.van}` : r.error);
+  } else if (b.dataset.redrive) {
+    b.disabled = true;
+    const r = await post(`/api/dlq/${b.dataset.redrive}/redrive`);
+    toast(r.ok ? "Gateway fixed, task redriven" : r.error);
+  } else if (b.id === "sms") {
+    await post("/api/sms-down");
+    toast("The SMS gateway will reject the next notify step");
+  } else if (b.dataset.quarantine) {
+    b.disabled = true;
+    const r = await post(`/api/quarantine/${b.dataset.quarantine}`);
+    toast(r.ok ? `${b.dataset.quarantine} ${r.quarantined ? "quarantined" : "reinstated"}` : r.error);
+  } else if (b.dataset.kill) {
+    b.disabled = true;
+    await post(`/api/kill/${b.dataset.kill}`);
+  } else if (b.dataset.approve || b.dataset.decline) {
+    await post(`/api/approval/${b.dataset.approve || b.dataset.decline}`, {decision: b.dataset.approve ? "approved" : "declined"});
+  } else if (b.id === "demo") {
+    const r = await post("/api/demo");
+    toast(r.running ? "Demo loop on" : "Demo loop off");
+  } else if (b.id === "chaos") {
+    const r = await post("/api/chaos");
+    toast(r.on ? "Chaos monkey on" : "Chaos monkey off");
+  } else if (b.id === "present") {
+    store.set("desk.present", store.get("desk.present") === "1" ? "0" : "1");
+    applyTheme();
+  } else if (b.id === "theme") {
+    store.set("desk.theme", store.get("desk.theme") === "light" ? "dark" : "light");
+    applyTheme();
+  } else if (b.id === "rewind") {
+    b.disabled = true;
+    try { await startRewind(); } finally { b.disabled = false; }
+  } else if (b.id === "live") {
+    stopRewind();
+  } else if (b.id === "forget") {
+    const r = await post("/api/memory/forget");
+    toast(`Forgot ${r.forgotten ?? 0} customer fact(s)`);
+  } else if (b.id === "newday") {
+    b.disabled = true;
+    toast("Starting a new day");
+    await post("/api/new-day");
+  }
+});
+
+$("scrub").addEventListener("input", (ev) => {
+  if (!rewind) return;
+  rewind.t = Number(ev.target.value);
+  rewind.snap = snapshot(rewind.t);
+  render();
+});
+$("vancount").addEventListener("input", (ev) => { draggingVans = true; $("vanval").textContent = ev.target.value; });
+$("vancount").addEventListener("change", async (ev) => {
+  draggingVans = false;
+  toast(`New day with ${ev.target.value} vans`);
+  const r = await post("/api/vans", {count: Number(ev.target.value)});
+  if (r.count) state.van_count = r.count;
+});
+
+(async () => {
+  fetch("/static/ld-logo.svg").then((r) => r.ok ? r.text() : "").then((svg) => {
+    if (svg.trim().startsWith("<svg")) $("logo").innerHTML = svg.replace(/<title>[\s\S]*?<\/title>/, "");
+  }).catch(() => {});
+  cfg = await (await fetch("/api/config")).json();
+  legs = (await (await fetch("/api/roads")).json()).legs || {};
+  for (const [scenario, text] of Object.entries(cfg.scenarios)) {
+    const b = document.querySelector(`[data-scenario="${scenario}"]`);
+    if (b) b.title = text;
+  }
+  const s = await (await fetch("/api/state")).json();
+  for (const p of s.positions) positions[p.van] = p;
+  for (const e of s.feed) onEvent(e);
+  state = s;
+  L.marker([cfg.depot.lat, cfg.depot.lon], {icon: L.divIcon({className: "", html: '<div class="depot"></div>', iconSize: [18, 18], iconAnchor: [9, 9]})})
+    .addTo(map).bindTooltip(`<b>Depot</b><br>${esc(cfg.depot.suburb)}`);
+  render();
+  const pts = [[cfg.depot.lat, cfg.depot.lon], ...Object.values(cfg.stops).map((s) => [s.lat, s.lon])];
+  map.fitBounds(pts, {padding: [30, 30]});
+  connect();
+})();
+</script>
+</body>
+</html>
