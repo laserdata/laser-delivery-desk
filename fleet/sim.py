@@ -163,7 +163,7 @@ class Sim:
         if not left:
             return
         stop, order = random.choice(left), ls.mint_ulid()
-        await put_json(f.stops, stop, {"status": "new", "attempts": 0, "ordered": self.minutes})
+        await put_json(f.stops, stop, {"status": "new", "attempts": 0, "ordered": self.minutes, "order": order})
         spec = C.STOPS[stop]
         await f.event("order", stop=stop, incident=order, text=f"{spec['customer']} in {spec['suburb']} ordered a parcel")
         book["issued"].append(stop)
