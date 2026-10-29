@@ -22,8 +22,8 @@ import laser_sdk as ls
 from . import config as C
 from . import plan
 from . import telemetry
-from .core import (Fleet, body_json, cas_update, clock, connect, get_json, place, put_json, put_once,
-                   scan_json, wait_ready)
+from .core import (Fleet, body_json, cas_update, clock, connect, get_json, order_session, place, put_json,
+                   put_once, scan_json, wait_ready)
 from .llm import choose_llm, is_mock
 from .memory import CustomerMemory, describe, fact, follow_up
 
@@ -322,6 +322,7 @@ class Customer:
             messages.append({"stop": stop, "customer": spec["customer"], "text": text,
                              "history": len(history)})
             await self.fleet.event("notice", van=exc["van"], stop=stop, incident=exc["id"], text=text)
+            await self.tell_order(stop, text)
             await self.remember(exc, stop)
         return messages
 
@@ -336,7 +337,18 @@ class Customer:
             f"Their new order is booked for delivery today between {clock(start)} and {clock(end)}. "
             "Friendly and plain."), fallback)
         await self.fleet.event("notice", van=van, stop=stop, incident=exc["id"], text=text)
+        await self.tell_order(stop, text)
         return {"stop": stop, "customer": spec["customer"], "text": text, "history": 0}
+
+    async def tell_order(self, stop: str, text: str) -> None:
+        """Put the SMS on the order's session, if the stop is an order, so the
+        session holds everything its customer was told."""
+        order = (await get_json(self.fleet.stops, stop) or {}).get("order")
+        if not order:
+            return
+        session = order_session(self.fleet.laser, order)
+        await self.fleet.laser.sessions().open(session).as_agent(self.fleet.name).append(ls.event_envelope(
+            ls.new_conversation_id(), session, self.fleet.name, text.encode(), operation="sms"))
 
     async def sms_gateway(self, exc: dict) -> None:
         """The SMS gateway down button arms a fault: the next notify step claims it and
@@ -580,7 +592,7 @@ class Dispatch:
                     await self.open(rows.value_text(row, "incident"), rows.value_text(row, "van"))
             if await events.poll():
                 rows = await (self.laser.query(C.EVENTS_INDEX)
-                              .filter_in("kind", ["failed", "day_done", "redriven", "order"])
+                              .filter_in("kind", ["failed", "day_done", "redriven", "order", "delivered"])
                               .filter_gt("ts", seen_ev).order_asc("ts").limit(200).fetch())
                 for row in rows.rows:
                     seen_ev = max(seen_ev, rows.value_i64(row, "ts") or 0)
@@ -590,6 +602,8 @@ class Dispatch:
                         await self.reopen(rows.value_text(row, "incident"))
                     elif rows.value_text(row, "kind") == "order":
                         await self.open_order(rows.value_text(row, "incident"), rows.value_text(row, "stop"))
+                    elif rows.value_text(row, "kind") == "delivered":
+                        await self.delivered(rows.value_text(row, "stop"), rows.value_text(row, "van"))
                     else:
                         await self.open(rows.value_text(row, "incident"), rows.value_text(row, "van"))
             await asyncio.sleep(0.25)
@@ -619,18 +633,39 @@ class Dispatch:
         self.start(exc)
 
     async def open_order(self, order_id: str | None, stop: str | None) -> None:
-        """A customer ordered: run the order workflow (assign, then confirm) once."""
+        """A customer ordered: open the order's session, which stays open until
+        the parcel is delivered, and run the order workflow (assign, then
+        confirm) once, as a child session of it."""
         if not order_id or not stop or await get_json(self.fleet.exceptions, order_id) is not None:
             return
-        exc = {"id": order_id, "van": "", "kind": "new_order", "stop": stop,
-               "run": ls.mint_ulid(), "state": "open", "opened": await self.fleet.minutes()}
+        exc = {"id": order_id, "van": "", "kind": "new_order", "stop": stop, "run": ls.mint_ulid(),
+               "session": order_session(self.laser, order_id), "state": "open", "opened": await self.fleet.minutes()}
         root = telemetry.start_root("order", stop=stop, incident=order_id)
         exc.update(trace=telemetry.carrier(root), trace_id=telemetry.trace_id(root))
         if not await put_once(self.fleet.exceptions, order_id, exc):
             telemetry.end_root(root, duplicate=True)
             return
         self.roots[order_id] = root
+        spec = C.STOPS[stop]
+        order, lease = await (self.laser.sessions().create(f"order/{order_id}")
+                              .agent(self.fleet.name).tag(f"stop:{stop}").begin())
+        await order.state().set("intent", {"op": "deliver-parcel", "stop": stop, "customer": spec["customer"],
+                                           "suburb": spec["suburb"], "ordered": clock(exc["opened"])})
+        lease.release()
+        _, lease = await (self.laser.sessions().start().with_id(exc["run"])
+                          .parent(exc["session"], exc["session"]).agent(self.fleet.name).begin())
+        lease.release()
         self.start(exc)
+
+    async def delivered(self, stop: str | None, van: str | None) -> None:
+        """An ordered parcel is delivered: its order's session ends, once."""
+        record = await get_json(self.fleet.stops, stop) if stop else None
+        order = (record or {}).get("order")
+        if not order or not await put_once(self.fleet.results, f"{order}:delivered", True):
+            return
+        session = self.laser.sessions().open(order_session(self.laser, order)).as_agent(self.fleet.name)
+        await session.state().set("delivered", {"van": van, "at": clock(record.get("at", await self.fleet.minutes()))})
+        await session.end()
 
     async def reopen(self, incident_id: str | None) -> None:
         """A dead letter was redriven. If its workflow gave up meanwhile, run it
@@ -680,6 +715,8 @@ class Dispatch:
             replan = json.loads(bytes(outcome.outputs[plan_step]))
             if exc["kind"] == "new_order":
                 exc["van"] = replan.get("van", "")
+                order = self.laser.sessions().open(exc["session"]).as_agent(f.name)
+                await order.state().set("placed", {"van": exc["van"], "summary": replan["summary"]})
             exc.update(state="resolved", summary=replan["summary"], closed=await f.minutes())
             await put_json(f.exceptions, exc["id"], exc)
             await f.event("resolved", van=exc["van"], incident=exc["id"], text=replan["summary"])

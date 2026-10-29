@@ -75,6 +75,12 @@ async def wait_ready(laser: ls.Laser) -> None:
             await asyncio.sleep(0.3)
 
 
+def order_session(laser: ls.Laser, order: str) -> str:
+    """The order's session id. It derives from the order id, so every process
+    reaches the same session, run after run."""
+    return laser.sessions().create(f"order/{order}").id()
+
+
 # ---------------------------------------------------------------- geography
 
 def metres(a: dict, b: dict) -> float:
