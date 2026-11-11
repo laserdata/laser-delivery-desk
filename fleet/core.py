@@ -142,8 +142,7 @@ async def cas_update(kv, key: str, change):
 
 
 async def scan_json(kv) -> dict:
-    page = await kv.scan().limit(500).fetch()
-    return {entry.key_str(): entry.decode_value() for entry in page.entries}
+    return {entry.key_str(): entry.decode_value() for entry in await kv.scan().entries()}
 
 
 class Fleet:

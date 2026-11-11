@@ -82,8 +82,9 @@ class Desk:
         self.chaos = ChaosMonkey(self.sup, on_kill=self.on_chaos_kill, may_kill=self.may_kill)
         if self.chaos_on:
             self.chaos.start()
+        # An approval prompt reaches only an agent that serves input_request.
         self.approver = self.laser.spawn_agent(C.APPROVER, C.INBOX, self.on_interrupt,
-                                               respond_on=C.INBOX, poll_interval_ms=20)
+                                               respond_on=C.INBOX, operations=["input_request"])
         await self.approver.ready()
         self.tasks = [asyncio.create_task(self.tail_positions()),
                       asyncio.create_task(self.tail_events()),
@@ -265,7 +266,7 @@ class Desk:
     async def on_interrupt(self, ctx, message) -> None:
         """The invoice agent's approval gate: hold until someone clicks."""
         p = message.provenance
-        if p.target_agent_id is not None or p.agent != "invoice":
+        if p.target_agent_id != C.APPROVER or p.agent != "invoice":
             return
         try:
             body = json.loads(bytes(message.body()))
