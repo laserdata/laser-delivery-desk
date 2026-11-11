@@ -6,7 +6,7 @@ A parcel delivery desk run by agents on one durable log. Four vans (two to eight
 
 Kill any agent mid-workflow and it comes back where it left off. A killed routing agent finds its saved plan and applies it. A killed dispatch resumes each open workflow from its journal and skips the steps already done.
 
-Built on Laser SDK 0.8.2 for Python, running on Laser Stack locally or LaserData Cloud.
+Built on Laser SDK 0.9.1 for Python, running on Laser Stack locally or LaserData Cloud.
 
 ## What it shows
 

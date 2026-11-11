@@ -441,9 +441,10 @@ class Invoice:
             await put_json(f.day, "invoice_check", check)
             await f.event("approval", step="check", text=prompt, cents=over)
             try:
-                answer = bytes(await ctx.approval_gate(C.INBOX, json.dumps(
+                grant = await ctx.approval_gate(C.APPROVER, C.INBOX, json.dumps(
                     {"kind": "invoice", "prompt": prompt, "cents": over}).encode(),
-                    timeout_ms=15 * 60_000)).decode()
+                    timeout_ms=15 * 60_000)
+                answer = bytes(grant.decision).decode()
             except ls.LaserError as error:
                 answer = f"no answer ({type(error).__name__})"
             if answer == "approved":
@@ -557,6 +558,12 @@ class Balance:
         return pick
 
 
+# A step's deadline rides its command, and an agent that picks the step up
+# after it drops it. Giving each step the whole run's budget lets a step
+# survive its agent being killed and restarted mid-step.
+RUN_BUDGET_MS = 600_000
+
+
 class Dispatch:
     """Watches the two views for trouble and runs one workflow per exception:
     assess and replan (routing), then notify (customer). A restarted dispatch
@@ -579,8 +586,8 @@ class Dispatch:
         if await get_json(f.day, "invoice_started") and await get_json(f.day, "invoice_check") is None:
             # Killed after the invoice came in but before the check started: ask again.
             self.ask_invoice()
-        positions = self.laser.watch(index=C.POSITIONS_INDEX)
-        events = self.laser.watch(index=C.EVENTS_INDEX)
+        positions = await self.laser.watch(index=C.POSITIONS_INDEX)
+        events = await self.laser.watch(index=C.EVENTS_INDEX)
         seen_pos = seen_ev = 0
         while True:
             if await positions.poll():
@@ -698,17 +705,20 @@ class Dispatch:
 
         wf = self.laser.workflow("dispatch", fixed_inbox=C.INBOX)
         wf.run_id(exc["run"])  # the same id resumes the same run from its journal
-        wf.budget(ls.WorkflowBudget.unlimited().invocations(6).wall_clock(600_000))
+        wf.budget(ls.WorkflowBudget.unlimited().invocations(6).wall_clock(RUN_BUDGET_MS))
         # Each step names a skill, not an agent: the agent registry resolves the
         # agent whose card advertises it (config.SKILLS).
         if exc["kind"] == "new_order":
             plan_step = "assign"
-            wf.step("assign", to_capable="assign", policy=self.balance, build=task("assign"))
+            wf.step("assign", to_capable="assign", policy=self.balance, build=task("assign"),
+                    deadline_ms=RUN_BUDGET_MS)
         else:
             plan_step = "replan"
-            wf.step("assess", to_capable="assess", policy=self.balance, build=task("assess"))
-            wf.step("replan", to_capable="replan", policy=self.balance, after=["assess"], build=task("replan"))
-        wf.step("notify", to_capable="notify", policy=self.balance, after=[plan_step],
+            wf.step("assess", to_capable="assess", policy=self.balance, build=task("assess"),
+                    deadline_ms=RUN_BUDGET_MS)
+            wf.step("replan", to_capable="replan", policy=self.balance, after=["assess"], build=task("replan"),
+                    deadline_ms=RUN_BUDGET_MS)
+        wf.step("notify", to_capable="notify", policy=self.balance, after=[plan_step], deadline_ms=RUN_BUDGET_MS,
                 build=task("notify", plan_step))
         try:
             outcome = await wf.run()
@@ -783,7 +793,7 @@ async def main(name: str) -> None:
     # The card in the agent registry: the skills this agent serves. A handler
     # that keeps failing is retried, then dead-lettered.
     handle = laser.spawn_agent(name, C.INBOX, handler, respond_on=C.INBOX,
-                               capabilities=C.SKILLS[name], poll_interval_ms=20,
+                               capabilities=C.SKILLS[name],
                                retry_max_attempts=C.RETRY_ATTEMPTS, retry_base_delay_ms=C.RETRY_DELAY_MS,
                                dead_letter=dead_letter)
     await handle.ready()
